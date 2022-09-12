@@ -34,7 +34,22 @@ m61_memory_buffer::~m61_memory_buffer() {
     munmap(this->buffer, this->size);
 }
 
+// Structure for keeping track of the malloc statistics
+// Using for phase 1
 
+struct allocation_statistics {
+    unsigned long long n_mallocs = 0;
+    unsigned long long n_frees = 0;
+    unsigned long long n_fails = 0;
+    unsigned long long allocation_bytes = 0;
+    unsigned long long failed_bytes = 0;
+    unsigned long long smallest_bytes = 0;
+    unsigned long long largest_bytes = 0;
+    uintptr_t smallest_bytes_location;
+    uintptr_t largest_bytes_location;
+};
+
+static allocation_statistics my_data;
 
 
 /// m61_malloc(sz, file, line)
@@ -46,14 +61,37 @@ m61_memory_buffer::~m61_memory_buffer() {
 void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
     // Your code here.
+
     if (default_buffer.pos + sz > default_buffer.size) {
         // Not enough space left in default buffer for allocation
+
+        //increase failcount
+        my_data.n_fails++;
+        //increase failbytes
+        my_data.failed_bytes += sz;
+
         return nullptr;
     }
 
     // Otherwise there is enough space; claim the next `sz` bytes
     void* ptr = &default_buffer.buffer[default_buffer.pos];
     default_buffer.pos += sz;
+
+    // Adding to malloc count
+    my_data.n_mallocs ++;
+    // Adding to byte count
+    my_data.allocation_bytes += sz;
+
+    // Check if heap min or max
+
+    if (sz > my_data.largest_bytes) {
+        my_data.largest_bytes = sz;
+        my_data.largest_bytes_location = (uintptr_t) ptr;
+    }
+    if (sz < my_data.smallest_bytes) {
+        my_data.smallest_bytes = sz;
+        my_data.smallest_bytes_location = (uintptr_t) ptr;
+    }
     return ptr;
 }
 
@@ -68,6 +106,10 @@ void m61_free(void* ptr, const char* file, int line) {
     // avoid uninitialized variable warnings
     (void) ptr, (void) file, (void) line;
     // Your code here. The handout code does nothing!
+    if (ptr != nullptr) {
+        //Adding to free count
+        my_data.n_frees ++;
+    }
 }
 
 
@@ -95,7 +137,15 @@ m61_statistics m61_get_statistics() {
     // Your code here.
     // The handout code sets all statistics to enormous numbers.
     m61_statistics stats;
-    memset(&stats, 255, sizeof(m61_statistics));
+    stats.nactive = my_data.n_mallocs - my_data.n_frees;
+    stats.ntotal = my_data.n_mallocs;
+    stats.total_size = my_data.allocation_bytes;
+    stats.nfail = my_data.n_fails;
+    stats.fail_size = my_data.failed_bytes;
+    stats.heap_max = my_data.largest_bytes_location;
+    stats.heap_min = my_data.smallest_bytes_location;
+
+    //memset(&stats, 255, sizeof(m61_statistics));
     return stats;
 }
 
