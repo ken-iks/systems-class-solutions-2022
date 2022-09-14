@@ -43,10 +43,8 @@ struct allocation_statistics {
     unsigned long long n_fails = 0;
     unsigned long long allocation_bytes = 0;
     unsigned long long failed_bytes = 0;
-    unsigned long long smallest_bytes = 0;
-    unsigned long long largest_bytes = 0;
-    uintptr_t smallest_bytes_location;
-    uintptr_t largest_bytes_location;
+    uintptr_t smallest_bytes_location = SIZE_MAX;
+    uintptr_t largest_bytes_location = 0;
 };
 
 static allocation_statistics my_data;
@@ -62,12 +60,20 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
     // Your code here.
 
-    if (default_buffer.pos + sz > default_buffer.size) {
+    if (sz == 0)  {
+        return nullptr;
+    }
+
+    // Problem right now is integer overflow
+    // Fixed for now but honestly a bad fix
+
+    if (default_buffer.pos + sz > default_buffer.size 
+        || SIZE_MAX - sz < default_buffer.pos) {
         // Not enough space left in default buffer for allocation
 
-        //increase failcount
+        // increase failcount
         my_data.n_fails++;
-        //increase failbytes
+        // increase failbytes
         my_data.failed_bytes += sz;
 
         return nullptr;
@@ -83,13 +89,12 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     my_data.allocation_bytes += sz;
 
     // Check if heap min or max
+    uintptr_t ptr_addr = (uintptr_t) ptr;
 
-    if (sz > my_data.largest_bytes) {
-        my_data.largest_bytes = sz;
-        my_data.largest_bytes_location = (uintptr_t) ptr;
+    if (ptr_addr >= my_data.largest_bytes_location) {
+        my_data.largest_bytes_location = (uintptr_t) ptr + sz;
     }
-    if (sz < my_data.smallest_bytes) {
-        my_data.smallest_bytes = sz;
+    if (ptr_addr <= my_data.smallest_bytes_location) {
         my_data.smallest_bytes_location = (uintptr_t) ptr;
     }
     return ptr;
@@ -122,6 +127,13 @@ void m61_free(void* ptr, const char* file, int line) {
 
 void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
     // Your code here (to fix test019).
+    if (SIZE_MAX / sz < count) {
+        my_data.n_fails++;
+        // Question: In the case where there is integer overflow, what are
+        // you adding to the number of failed bytes?
+        my_data.failed_bytes += sz;
+        return nullptr;
+    }
     void* ptr = m61_malloc(count * sz, file, line);
     if (ptr) {
         memset(ptr, 0, count * sz);

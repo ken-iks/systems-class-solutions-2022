@@ -7,6 +7,7 @@
 int main() {
     size_t very_large_count = (size_t) -1 / 8 + 2;
     void* p = m61_calloc(very_large_count, 16);
+    
     assert(p == nullptr);
     m61_print_statistics();
 }
