@@ -6,6 +6,9 @@
 #include <cinttypes>
 #include <cassert>
 #include <sys/mman.h>
+#include <iostream>
+#include <map>
+static void * m61_find_free_space(size_t);
 
 
 struct m61_memory_buffer {
@@ -49,6 +52,95 @@ struct allocation_statistics {
 
 static allocation_statistics my_data;
 
+// Map for global set of freed allocations
+// Maps a buffer position to a size 
+
+// Other map is for active allocations
+// Again maps a bufer position to a size
+
+std::map<size_t, size_t> freed_allocations;
+using freemap_iter = std::map<size_t, size_t>::iterator;
+std::map<size_t, size_t> active_allocations;
+
+// Function for checking coalescance
+
+bool can_coalesce_up(freemap_iter it) {
+    assert(it != freed_allocations.end());
+    auto next = it;
+    ++next;
+    return (next != freed_allocations.end()
+            && it->first + it->second == next->first);
+}
+
+bool can_coalesce_down(freemap_iter it) {
+    assert(it != freed_allocations.end());
+    if (it == freed_allocations.begin()) {
+        return false;
+    }
+    auto prev = it;
+    --prev;
+    return (prev->first + prev->second == it->first);
+}
+
+void coalesce_up(freemap_iter it) {
+    if (can_coalesce_up(it)) {
+        auto next = it;
+        ++next;
+        it->second += next->second;
+        freed_allocations.erase(next);
+    }
+}
+
+// Function to look through the free spots for some space to allocate
+
+static void * m61_find_free_space(size_t sz) {
+    // Coalesce the freed allocations
+    for (auto p = freed_allocations.begin();
+        p != freed_allocations.end();
+        p++) {
+        if (sz <= p->second) {
+            void* ptr = (void*) p->first;
+            active_allocations[p->first] = sz;
+            size_t spare_space = p->second - sz;
+            if (spare_space > 0) {
+                freed_allocations[p->first + sz] = spare_space;
+                my_data.n_frees++;
+            }
+            freed_allocations.erase(p->first);
+            return ptr;               
+        }
+        else if (can_coalesce_up(p)) {
+            coalesce_up(p);
+            return m61_find_free_space(sz);
+        }
+        else if (can_coalesce_down(p)) {
+            --p;
+            coalesce_up(p);
+            return m61_find_free_space(sz);
+        }
+    }
+    return nullptr;
+}
+
+// Function to update statistics every time a new malloc is performed
+
+static void new_malloc(void* ptr, size_t sz) {
+    my_data.n_mallocs++;
+    my_data.allocation_bytes += sz;
+
+    // Check if heap min or max
+    uintptr_t ptr_addr = (uintptr_t) ptr;
+
+    if (ptr_addr >= my_data.largest_bytes_location) {
+        my_data.largest_bytes_location = (uintptr_t) ptr + sz;
+    }
+    if (ptr_addr <= my_data.smallest_bytes_location) {
+        my_data.smallest_bytes_location = (uintptr_t) ptr;
+    }
+
+    active_allocations[(size_t) ptr] = sz;
+
+}
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
@@ -64,13 +156,22 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         return nullptr;
     }
 
-    // Problem right now is integer overflow
-    // Fixed for now but honestly a bad fix
-
     if (default_buffer.pos + sz > default_buffer.size 
         || SIZE_MAX - sz < default_buffer.pos) {
         // Not enough space left in default buffer for allocation
+        // Or check for integer overflow
 
+        // Look up allocation sizes to see if it can fit into a freed spot
+        // Currently rechecking defult buffer but should find a better way
+        if (default_buffer.pos + sz > default_buffer.size) {
+            void* pot_ptr = m61_find_free_space(sz);
+            if (pot_ptr) {
+                new_malloc(pot_ptr,sz);
+                return pot_ptr;
+            }
+        }
+
+        // No spot found
         // increase failcount
         my_data.n_fails++;
         // increase failbytes
@@ -83,20 +184,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     void* ptr = &default_buffer.buffer[default_buffer.pos];
     default_buffer.pos += sz;
 
-    // Adding to malloc count
-    my_data.n_mallocs ++;
-    // Adding to byte count
-    my_data.allocation_bytes += sz;
-
-    // Check if heap min or max
-    uintptr_t ptr_addr = (uintptr_t) ptr;
-
-    if (ptr_addr >= my_data.largest_bytes_location) {
-        my_data.largest_bytes_location = (uintptr_t) ptr + sz;
-    }
-    if (ptr_addr <= my_data.smallest_bytes_location) {
-        my_data.smallest_bytes_location = (uintptr_t) ptr;
-    }
+    new_malloc(ptr, sz);
     return ptr;
 }
 
@@ -112,8 +200,12 @@ void m61_free(void* ptr, const char* file, int line) {
     (void) ptr, (void) file, (void) line;
     // Your code here. The handout code does nothing!
     if (ptr != nullptr) {
-        //Adding to free count
+        // Adding to free count
+        auto it1 = active_allocations.find((size_t) ptr);
+        freed_allocations[(size_t) ptr] = it1->second;
+        active_allocations.erase((size_t) ptr);
         my_data.n_frees ++;
+
     }
 }
 

@@ -7,6 +7,7 @@
 int main() {
     for (int i = 0; i != 10000; ++i) {
         void* ptr = m61_malloc(1000);
+        //printf("%i", i);
         assert(ptr);
         m61_free(ptr);
     }
