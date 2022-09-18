@@ -52,6 +52,7 @@ struct allocation_statistics {
 
 static allocation_statistics my_data;
 
+
 // Map for global set of freed allocations
 // Maps a buffer position to a size 
 
@@ -61,6 +62,26 @@ static allocation_statistics my_data;
 std::map<size_t, size_t> freed_allocations;
 using freemap_iter = std::map<size_t, size_t>::iterator;
 std::map<size_t, size_t> active_allocations;
+
+// Function to update statistics every time a new malloc is performed
+
+static void new_malloc(void* ptr, size_t sz) {
+    my_data.n_mallocs++;
+    my_data.allocation_bytes += sz;
+
+    // Check if heap min or max
+    uintptr_t ptr_addr = (uintptr_t) ptr;
+
+    if (ptr_addr >= my_data.largest_bytes_location) {
+        my_data.largest_bytes_location = (uintptr_t) ptr + sz;
+    }
+    if (ptr_addr <= my_data.smallest_bytes_location) {
+        my_data.smallest_bytes_location = (uintptr_t) ptr;
+    }
+
+    active_allocations[(size_t) ptr] = sz;
+
+}
 
 // Function for checking coalescance
 
@@ -94,21 +115,23 @@ void coalesce_up(freemap_iter it) {
 // Function to look through the free spots for some space to allocate
 
 static void * m61_find_free_space(size_t sz) {
-    // Coalesce the freed allocations
+    // First check if there are any gaps in freed space big enough to
+    // store something of size sz. If so, return a pointer to that, if
+    // not, then return nullptr
     for (auto p = freed_allocations.begin();
         p != freed_allocations.end();
         p++) {
         if (sz <= p->second) {
             void* ptr = (void*) p->first;
-            active_allocations[p->first] = sz;
             size_t spare_space = p->second - sz;
             if (spare_space > 0) {
                 freed_allocations[p->first + sz] = spare_space;
-                my_data.n_frees++;
             }
             freed_allocations.erase(p->first);
             return ptr;               
         }
+        // Now check to see if it can coalesce intstead.
+        // If it can, then we do it, and recheck for free space
         else if (can_coalesce_up(p)) {
             coalesce_up(p);
             return m61_find_free_space(sz);
@@ -122,25 +145,6 @@ static void * m61_find_free_space(size_t sz) {
     return nullptr;
 }
 
-// Function to update statistics every time a new malloc is performed
-
-static void new_malloc(void* ptr, size_t sz) {
-    my_data.n_mallocs++;
-    my_data.allocation_bytes += sz;
-
-    // Check if heap min or max
-    uintptr_t ptr_addr = (uintptr_t) ptr;
-
-    if (ptr_addr >= my_data.largest_bytes_location) {
-        my_data.largest_bytes_location = (uintptr_t) ptr + sz;
-    }
-    if (ptr_addr <= my_data.smallest_bytes_location) {
-        my_data.smallest_bytes_location = (uintptr_t) ptr;
-    }
-
-    active_allocations[(size_t) ptr] = sz;
-
-}
 
 /// m61_malloc(sz, file, line)
 ///    Returns a pointer to `sz` bytes of freshly-allocated dynamic memory.
