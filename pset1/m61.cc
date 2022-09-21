@@ -46,6 +46,7 @@ struct allocation_statistics {
     unsigned long long n_fails = 0;
     unsigned long long allocation_bytes = 0;
     unsigned long long failed_bytes = 0;
+    unsigned long long freed_bytes = 0;
     uintptr_t smallest_bytes_location = SIZE_MAX;
     uintptr_t largest_bytes_location = 0;
 };
@@ -62,6 +63,28 @@ static allocation_statistics my_data;
 std::map<size_t, size_t> freed_allocations;
 using freemap_iter = std::map<size_t, size_t>::iterator;
 std::map<size_t, size_t> active_allocations;
+
+// Initially setting up the freed allocation to have the 8Mib buffer
+// This is to make it easy to coalesce never-freed memory
+
+int setup() {
+    size_t starting_pos = (size_t) &default_buffer.buffer[default_buffer.pos];
+    freed_allocations.insert({starting_pos, 8<<20});
+    return 0;
+}
+
+// This is for debugging purposes -> prints out the freed allocations
+void check_freed() {
+    for (auto p = freed_allocations.begin();
+    p != freed_allocations.end();
+    p++) {
+        printf("%zx is of size %zx\n", p->first, p->second);
+    }
+}
+
+auto starter = setup();
+
+
 
 // Function to update statistics every time a new malloc is performed
 
@@ -81,6 +104,20 @@ static void new_malloc(void* ptr, size_t sz) {
 
     active_allocations[(size_t) ptr] = sz;
 
+    // Checking if the malloc is on the original buffer
+    auto it = freed_allocations.find((size_t) ptr);
+    if (it != freed_allocations.end()) {
+        size_t spare_space = it->second - sz;
+        if (spare_space > 0) {
+            auto temp1 = it->first;
+            freed_allocations.erase(it);
+            freed_allocations.insert({temp1 + sz, spare_space});
+        }
+        else {
+            freed_allocations.erase(it);
+        }
+    }
+
 }
 
 // Function for checking coalescance
@@ -89,8 +126,10 @@ bool can_coalesce_up(freemap_iter it) {
     assert(it != freed_allocations.end());
     auto next = it;
     ++next;
-    return (next != freed_allocations.end()
-            && it->first + it->second == next->first);
+    if (next == freed_allocations.end()) {
+        return false;
+    }
+    return it->first + it->second == next->first;
 }
 
 bool can_coalesce_down(freemap_iter it) {
@@ -104,12 +143,11 @@ bool can_coalesce_down(freemap_iter it) {
 }
 
 void coalesce_up(freemap_iter it) {
-    if (can_coalesce_up(it)) {
-        auto next = it;
-        ++next;
-        it->second += next->second;
-        freed_allocations.erase(next);
-    }
+    assert(can_coalesce_up(it));
+    auto next = it;
+    ++next;
+    it->second += next->second;
+    freed_allocations.erase(next);
 }
 
 // Function to look through the free spots for some space to allocate
@@ -118,9 +156,11 @@ static void * m61_find_free_space(size_t sz) {
     // First check if there are any gaps in freed space big enough to
     // store something of size sz. If so, return a pointer to that, if
     // not, then return nullptr
+
     for (auto p = freed_allocations.begin();
         p != freed_allocations.end();
         p++) {
+
         if (sz <= p->second) {
             void* ptr = (void*) p->first;
             size_t spare_space = p->second - sz;
@@ -130,18 +170,19 @@ static void * m61_find_free_space(size_t sz) {
             freed_allocations.erase(p->first);
             return ptr;               
         }
-        // Now check to see if it can coalesce intstead.
-        // If it can, then we do it, and recheck for free space
-        else if (can_coalesce_up(p)) {
-            coalesce_up(p);
-            return m61_find_free_space(sz);
-        }
-        else if (can_coalesce_down(p)) {
-            --p;
-            coalesce_up(p);
-            return m61_find_free_space(sz);
-        }
     }
+    return nullptr;
+}
+
+void* coalesce_with_buffer(size_t ptr) {
+    for (auto p = freed_allocations.begin();
+        p != freed_allocations.end();
+        p++) {
+            size_t end_of_block = p->first + p->second;
+            if (end_of_block == ptr) {
+                return (void*) p->first;
+            }
+        }
     return nullptr;
 }
 
@@ -169,6 +210,8 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         // Currently rechecking defult buffer but should find a better way
         if (default_buffer.pos + sz > default_buffer.size) {
             void* pot_ptr = m61_find_free_space(sz);
+            // If buffer position can't be moved backwards then check if freed
+            // allocations contain enough space
             if (pot_ptr) {
                 new_malloc(pot_ptr,sz);
                 return pot_ptr;
@@ -205,11 +248,31 @@ void m61_free(void* ptr, const char* file, int line) {
     // Your code here. The handout code does nothing!
     if (ptr != nullptr) {
         // Adding to free count
-        auto it1 = active_allocations.find((size_t) ptr);
-        freed_allocations[(size_t) ptr] = it1->second;
-        active_allocations.erase((size_t) ptr);
-        my_data.n_frees ++;
+        size_t ptr_pos = (size_t) ptr;
+        auto it1 = active_allocations.find(ptr_pos);
+        auto it2 = freed_allocations.find(ptr_pos);
+        // Check if allocation actually exists
+        if (it2 != freed_allocations.end()) {
+            fprintf(stderr, "MEMORY BUG: invalid free of pointer %zx, double free\n", ptr);
+            abort();    
+        }
+        if (it1 == active_allocations.end()) {
+            fprintf(stderr, "MEMORY BUG: invalid free of pointer %zx, not in heap\n", ptr);
+            abort();
+        }
 
+        freed_allocations.insert({ptr_pos, it1->second});
+        my_data.n_frees ++;
+        my_data.freed_bytes += it1->second;
+
+        auto it = freed_allocations.find(ptr_pos);
+        while (can_coalesce_down(it)) {
+            --it;
+        }
+        while (can_coalesce_up(it)) {
+            coalesce_up(it);
+        }
+        active_allocations.erase(ptr_pos);
     }
 }
 
@@ -248,12 +311,12 @@ m61_statistics m61_get_statistics() {
     stats.nactive = my_data.n_mallocs - my_data.n_frees;
     stats.ntotal = my_data.n_mallocs;
     stats.total_size = my_data.allocation_bytes;
+    stats.active_size = my_data.allocation_bytes - my_data.freed_bytes;
     stats.nfail = my_data.n_fails;
     stats.fail_size = my_data.failed_bytes;
     stats.heap_max = my_data.largest_bytes_location;
     stats.heap_min = my_data.smallest_bytes_location;
 
-    //memset(&stats, 255, sizeof(m61_statistics));
     return stats;
 }
 

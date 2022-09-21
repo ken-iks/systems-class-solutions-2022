@@ -27,8 +27,7 @@ int main() {
     assert(bigptr);
     m61_free(bigptr);
     m61_free(ptrs[0]);
-
-    m61_print_statistics();
+    m61_print_statistics(); 
 }
 
 //! alloc count: active          0   total       2001   fail          0
