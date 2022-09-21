@@ -251,13 +251,19 @@ void m61_free(void* ptr, const char* file, int line) {
         size_t ptr_pos = (size_t) ptr;
         auto it1 = active_allocations.find(ptr_pos);
         auto it2 = freed_allocations.find(ptr_pos);
+
         // Check if allocation actually exists
+        if (ptr_pos > my_data.largest_bytes_location 
+        || ptr_pos < my_data.smallest_bytes_location) {
+            fprintf(stderr, "MEMORY BUG: %s:%d: invalid free of pointer %p, not in heap\n", file, line, ptr);
+            abort();             
+        }
         if (it2 != freed_allocations.end()) {
-            fprintf(stderr, "MEMORY BUG: invalid free of pointer %zx, double free\n", ptr);
+            fprintf(stderr, "MEMORY BUG: %s:%d: invalid free of pointer %p, double free\n", file, line, ptr);
             abort();    
         }
         if (it1 == active_allocations.end()) {
-            fprintf(stderr, "MEMORY BUG: invalid free of pointer %zx, not in heap\n", ptr);
+            fprintf(stderr, "MEMORY BUG: %s:%d: invalid free of pointer %p, not allocated\n", file, line, ptr);
             abort();
         }
 
