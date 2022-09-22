@@ -6,6 +6,7 @@
 
 int main() {
     int* ptr = (int*) m61_malloc(sizeof(int) * 10);
+    printf("%c is ptr[10]\n", ptr[10]);
     fprintf(stderr, "Will free %p\n", ptr);
     for (int i = 0; i <= 10 /* Whoops! Should be < */; ++i) {
         ptr[i] = i;

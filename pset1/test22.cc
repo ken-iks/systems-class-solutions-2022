@@ -21,8 +21,9 @@ int main() {
         ptrs[n / 2] = m61_malloc(850);
         assert(ptrs[n / 2]);
     }
-
+    
     for (size_t i = 0; i != n; ++i) {
+        //printf("Special character, %li, location: %zx\n", i, (size_t)ptrs[i] + 850);
         m61_free(ptrs[i]);
     }
     m61_print_statistics();
