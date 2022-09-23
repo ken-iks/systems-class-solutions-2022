@@ -361,6 +361,17 @@ void m61_free(void* ptr, const char* file, int line) {
         }
         if (it1 == active_allocations.end()) {
             fprintf(stderr, "MEMORY BUG: %s:%d: invalid free of pointer %p, not allocated\n", file, line, ptr);
+
+            for (auto p = active_allocations.begin();
+            p != active_allocations.end();
+            p++) {
+                if (ptr_pos > p->first && ptr_pos < p->first + p->second) {
+                    auto it = allocation_info.find(p->first);
+                    fprintf(stderr, "  %s:%d: %p is %zu bytes inside a %zu byte region allocated here\n", it->second.file, it->second.line, ptr, ptr_pos - p->first, p->second - SIZECONST);
+                    abort();
+                }
+            }
+
             abort();
         }
         auto testing = (char*) (it1->first + it1->second - SIZECONST);
