@@ -65,6 +65,14 @@ std::map<size_t, size_t> freed_allocations;
 using freemap_iter = std::map<size_t, size_t>::iterator;
 std::map<size_t, size_t> active_allocations;
 
+struct extra_info {
+    const char* file;
+    int line;
+};
+
+std::map<size_t, extra_info> allocation_info;
+using extramap_iter = std::map<size_t, extra_info>::iterator;
+
 size_t add_padding(size_t sz) {
     size_t pad = alignof(max_align_t) - (sz % alignof(max_align_t));
     if (pad == alignof(max_align_t)) {
@@ -108,7 +116,7 @@ auto starter = setup();
 
 // Function to update statistics every time a new malloc is performed
 
-static void new_malloc(void* ptr, size_t sz) {
+static void new_malloc(void* ptr, size_t sz, const char* file, int line) {
     my_data.n_mallocs++;
     my_data.allocation_bytes += sz;
     assert((size_t) ptr % 16 == 0);
@@ -124,6 +132,7 @@ static void new_malloc(void* ptr, size_t sz) {
     }
 
     active_allocations[(size_t) ptr] = sz + SIZECONST;
+    allocation_info[(size_t) ptr] = {file, line};
     size_t space_im_taking = sz + SIZECONST;
     space_im_taking += add_padding(space_im_taking);
 
@@ -276,7 +285,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
             // If buffer position can't be moved backwards then check if freed
             // allocations contain enough space
             if (pot_ptr) {
-                new_malloc(pot_ptr,sz);
+                new_malloc(pot_ptr,sz,file,line);
                 return pot_ptr;
             }
         }
@@ -311,13 +320,10 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     default_buffer.pos += total_size;
 
     assert(default_buffer.pos % 16 ==0);
-
-    
-
     
 
 
-    new_malloc(ptr, sz);
+    new_malloc(ptr, sz, file, line);
     return ptr;
 }
 
@@ -368,7 +374,7 @@ void m61_free(void* ptr, const char* file, int line) {
 
         freed_allocations.insert({ptr_pos + add_padding(ptr_pos), it1->second + add_padding(it1->second)});
         my_data.n_frees ++;
-        my_data.freed_bytes += it1->second;
+        my_data.freed_bytes += it1->second - SIZECONST;
 
         auto it = freed_allocations.find(ptr_pos + add_padding(ptr_pos));
         while (can_coalesce_down(it)) {
@@ -378,6 +384,7 @@ void m61_free(void* ptr, const char* file, int line) {
             coalesce_up(it);
         }
         active_allocations.erase(ptr_pos);
+        allocation_info.erase(ptr_pos);
     }
 }
 
@@ -443,5 +450,10 @@ void m61_print_statistics() {
 ///    memory.
 
 void m61_print_leak_report() {
-    // Your code here.
+    for (auto p = active_allocations.begin();
+    p != active_allocations.end();
+    p++) {
+        auto it = allocation_info.find(p->first);
+        printf("LEAK CHECK: %s:%d: allocated object %p with size %zu\n", it->second.file, it->second.line, (void*) p->first, p->second - SIZECONST);
+    }
 }
