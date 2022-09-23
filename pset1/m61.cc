@@ -8,7 +8,7 @@
 #include <sys/mman.h>
 #include <iostream>
 #include <map>
-static void * m61_find_free_space(size_t);
+static void * m61_find_free_space(size_t, size_t);
 const size_t SIZECONST = sizeof('#');
 
 
@@ -181,7 +181,7 @@ void coalesce_up(freemap_iter it) {
 
 // Function to look through the free spots for some space to allocate
 
-static void * m61_find_free_space(size_t sz) {
+static void * m61_find_free_space(size_t sz, size_t partial_size) {
     // First check if there are any gaps in freed space big enough to
     // store something of size sz. If so, return a pointer to that, if
     // not, then return nullptr
@@ -192,6 +192,7 @@ static void * m61_find_free_space(size_t sz) {
 
         if (sz <= p->second) {
             void* ptr = (void*) p->first;
+            // Spare memory in the block that will not be used
             size_t spare_space = p->second - sz;
             //printf("Checking alignement of %zx\n", p->first);
             assert(p->first % 16 == 0);
@@ -200,6 +201,9 @@ static void * m61_find_free_space(size_t sz) {
             /*auto testing = (int*) (p->first + sz + spare_space - SIZECONST);
             printf("%p is where I am putting my special character\n", testing);
             *testing = 4;*/
+           assert(spare_space % 16 == 0);
+           assert(sz % 16 == 0);
+           //assert((p->first + sz - SIZECONST) % 16 == 0);
             if (spare_space > 0) {
                 //printf("time to work!!! Pointer to %zx of size %zu with %zu spare\n", p->first, p->second, spare_space);
                 //size_t pad = alignof(max_align_t) - ((spare_space) % alignof(max_align_t));
@@ -208,7 +212,7 @@ static void * m61_find_free_space(size_t sz) {
                 //printf("uh ohhh\n");
                 freed_allocations[p->first + sz] = spare_space ;
             }
-            auto testing2 = (char*) (p->first + sz - SIZECONST);
+            auto testing2 = (char*) (p->first + partial_size);
             //printf("%p is where I am putting my special character\n", testing2);
             *testing2 = '#';
             freed_allocations.erase(p->first);
@@ -268,7 +272,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
         // Currently rechecking defult buffer but should find a better way
         if (default_buffer.pos + whole_size > default_buffer.size) {
             assert(whole_size % 16 == 0);
-            void* pot_ptr = m61_find_free_space(whole_size);
+            void* pot_ptr = m61_find_free_space(whole_size, sz);
             // If buffer position can't be moved backwards then check if freed
             // allocations contain enough space
             if (pot_ptr) {
@@ -337,10 +341,7 @@ void m61_free(void* ptr, const char* file, int line) {
 
         check_freed();
 
-        /*printf("Checking %zx\n", it1->first+it1->second - SIZECONST);
-        for (size_t i=it1->first+830; i<it1->first + it1->second+20; i++) {
-            printf("%zx has value %i\n", i, *(int*) i);
-        }*/
+
 
         // Check if allocation actually exists
         if (ptr_pos > my_data.largest_bytes_location 
@@ -359,7 +360,7 @@ void m61_free(void* ptr, const char* file, int line) {
         auto testing = (char*) (it1->first + it1->second - SIZECONST);
         //printf("%p is the memory location of the special character\n", testing);
         if (*testing != '#') {
-             //printf("%p does not have #. Instead it has %i\n", testing, *(testing));
+             printf("%p does not have #. Instead it has %i\n", testing, *(testing));
              fprintf(stderr, "MEMORY BUG: %s:%d: detected wild write during free of pointer %p\n", file, line, ptr);
              abort();           
         }

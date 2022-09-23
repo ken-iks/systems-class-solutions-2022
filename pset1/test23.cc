@@ -26,8 +26,9 @@ int main() {
         assert(ptrs[n]);
         ++n;
     }
-
+    
     for (size_t i = 0; i != n; ++i) {
+        //printf("Trying to free number %li: %p\n", i, ptrs[i]);
         m61_free(ptrs[i]);
     }
     m61_free(smallptr);
