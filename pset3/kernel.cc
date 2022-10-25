@@ -67,6 +67,14 @@ void kernel_start(const char* command) {
             // nullptr is inaccessible even to the kernel
             perm = 0;
         }
+
+        if (addr < PROC_START_ADDR) {
+            perm = PTE_P | PTE_W;
+        }
+
+        if (vmiter(kernel_pagetable, addr).pa() == CONSOLE_ADDR) {
+            perm = PTE_PWU;
+        }
         // install identity mapping
         int r = vmiter(kernel_pagetable, addr).try_map(addr, perm);
         assert(r == 0); // mappings during kernel_start MUST NOT fail
@@ -151,9 +159,23 @@ void kfree(void* kptr) {
 
 void process_setup(pid_t pid, const char* program_name) {
     init_process(&ptable[pid], 0);
-
     // initialize process page table
-    ptable[pid].pagetable = kernel_pagetable;
+    ptable[pid].pagetable = kalloc_pagetable();
+
+    for (vmiter it(kernel_pagetable, 0); it.va() < MEMSIZE_PHYSICAL; it += PAGESIZE) {
+        if (it.present()) {
+            auto p = vmiter(ptable[pid].pagetable, it.va());
+            int y = p.try_map(it.pa(), it.perm());
+            assert(y == 0);
+        } 
+    }
+
+     for (vmiter it(ptable[pid].pagetable, 0); it.va() < MEMSIZE_PHYSICAL; it += PAGESIZE) {
+        if (it.present()) {
+            int r = it.try_map(it.pa(), it.perm() | PTE_U);
+            assert(r == 0);
+        } 
+    }   
 
     // obtain reference to program image
     // (The program image models the process executable.)
@@ -271,7 +293,6 @@ void exception(regstate* regs) {
     }
 }
 
-
 int syscall_page_alloc(uintptr_t addr);
 
 
@@ -298,8 +319,8 @@ uintptr_t syscall(regstate* regs) {
 
     // It can be useful to log events using `log_printf`.
     // Events logged this way are stored in the host's `log.txt` file.
-    /* log_printf("proc %d: syscall %d at rip %p\n",
-                  current->pid, regs->reg_rax, regs->reg_rip); */
+    log_printf("proc %d: syscall %d at rip %p\n",
+                  current->pid, regs->reg_rax, regs->reg_rip);
 
     // Show the current cursor location and memory state.
     console_show_cursor(cursorpos);
@@ -324,6 +345,12 @@ uintptr_t syscall(regstate* regs) {
         schedule();             // does not return
 
     case SYSCALL_PAGE_ALLOC:
+        if (current->regs.reg_rdi % PAGESIZE != 0 ||
+            current->regs.reg_rdi >= MEMSIZE_VIRTUAL ||
+            current->regs.reg_rdi < PROC_START_ADDR)
+            {
+                return 1;
+        }
         return syscall_page_alloc(current->regs.reg_rdi);
 
     default:
@@ -383,7 +410,6 @@ void run(proc* p) {
 
     // Check the process's current pagetable.
     check_pagetable(p->pagetable);
-
     // This function is defined in k-exception.S. It restores the process's
     // registers then jumps back to user mode.
     exception_return(p);
