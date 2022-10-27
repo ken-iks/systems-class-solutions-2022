@@ -162,7 +162,7 @@ void process_setup(pid_t pid, const char* program_name) {
     // initialize process page table
     ptable[pid].pagetable = kalloc_pagetable();
 
-    for (vmiter it(kernel_pagetable, 0); it.va() < MEMSIZE_PHYSICAL; it += PAGESIZE) {
+    for (vmiter it(kernel_pagetable, 0); it.va() < PROC_START_ADDR; it += PAGESIZE) {
         if (it.present()) {
             auto p = vmiter(ptable[pid].pagetable, it.va());
             int y = p.try_map(it.pa(), it.perm());
@@ -170,10 +170,9 @@ void process_setup(pid_t pid, const char* program_name) {
         } 
     }
 
-     for (vmiter it(ptable[pid].pagetable, 0); it.va() < MEMSIZE_PHYSICAL; it += PAGESIZE) {
+     for (vmiter it(ptable[pid].pagetable, 0); it.va() < PROC_START_ADDR; it += PAGESIZE) {
         if (it.present()) {
-            int r = it.try_map(it.pa(), it.perm() | PTE_U);
-            assert(r == 0);
+            log_printf("Virtual: %zx Physical: %zx\n", it.va(), it.pa());
         } 
     }   
 
@@ -349,7 +348,7 @@ uintptr_t syscall(regstate* regs) {
             current->regs.reg_rdi >= MEMSIZE_VIRTUAL ||
             current->regs.reg_rdi < PROC_START_ADDR)
             {
-                return 1;
+                return -1;
         }
         return syscall_page_alloc(current->regs.reg_rdi);
 
