@@ -170,9 +170,53 @@ void process_setup(pid_t pid, const char* program_name) {
         } 
     }
 
+    for (vmiter it(ptable[pid].pagetable, PROC_START_ADDR); it.va() < PROC_START_ADDR + (4 * PROC_SIZE); it += PAGESIZE)
+    if (it.va() < PROC_SIZE + PROC_START_ADDR) {
+        if (pid == 1) {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
+            assert(r == 0);
+        }
+        else {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
+            assert(r == 0);
+        }
+    }
+    else if (it.va() < (2 * PROC_SIZE) +  PROC_START_ADDR) {
+        if (pid == 2) {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
+            assert(r == 0);
+        }
+        else {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
+            assert(r == 0);
+        }
+    }
+    else if (it.va() < (3 * PROC_SIZE) +  PROC_START_ADDR) {
+        if (pid == 3) {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
+            assert(r == 0);
+        }
+        else {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
+            assert(r == 0);
+        }
+    }
+    else {
+        if (pid == 4) {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
+            assert(r == 0);
+        }
+        else {
+            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
+            assert(r == 0);
+        }
+    }
+
+    log_printf("PROC SIZE == PAGE SIZE? %i \n", PROC_SIZE == PAGESIZE);
+
      for (vmiter it(ptable[pid].pagetable, 0); it.va() < PROC_START_ADDR; it += PAGESIZE) {
         if (it.present()) {
-            log_printf("Virtual: %zx Physical: %zx\n", it.va(), it.pa());
+            //log_printf("Virtual: %zx Physical: %zx\n", it.va(), it.pa());
         } 
     }   
 
