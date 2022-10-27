@@ -170,56 +170,6 @@ void process_setup(pid_t pid, const char* program_name) {
         } 
     }
 
-    for (vmiter it(ptable[pid].pagetable, PROC_START_ADDR); it.va() < PROC_START_ADDR + (4 * PROC_SIZE); it += PAGESIZE)
-    if (it.va() < PROC_SIZE + PROC_START_ADDR) {
-        if (pid == 1) {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
-            assert(r == 0);
-        }
-        else {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
-            assert(r == 0);
-        }
-    }
-    else if (it.va() < (2 * PROC_SIZE) +  PROC_START_ADDR) {
-        if (pid == 2) {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
-            assert(r == 0);
-        }
-        else {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
-            assert(r == 0);
-        }
-    }
-    else if (it.va() < (3 * PROC_SIZE) +  PROC_START_ADDR) {
-        if (pid == 3) {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
-            assert(r == 0);
-        }
-        else {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
-            assert(r == 0);
-        }
-    }
-    else {
-        if (pid == 4) {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_PWU);
-            assert(r == 0);
-        }
-        else {
-            int r = vmiter(ptable[pid].pagetable, it.va()).try_map(it.va(), PTE_P | PTE_W);
-            assert(r == 0);
-        }
-    }
-
-    log_printf("PROC SIZE == PAGE SIZE? %i \n", PROC_SIZE == PAGESIZE);
-
-     for (vmiter it(ptable[pid].pagetable, 0); it.va() < PROC_START_ADDR; it += PAGESIZE) {
-        if (it.present()) {
-            //log_printf("Virtual: %zx Physical: %zx\n", it.va(), it.pa());
-        } 
-    }   
-
     // obtain reference to program image
     // (The program image models the process executable.)
     program_image pgm(program_name);
@@ -229,6 +179,8 @@ void process_setup(pid_t pid, const char* program_name) {
         for (uintptr_t a = round_down(seg.va(), PAGESIZE);
              a < seg.va() + seg.size();
              a += PAGESIZE) {
+            int r = vmiter(ptable[pid].pagetable, a).try_map(a, PTE_PWU);
+            assert(r == 0);
             // `a` is the process virtual address for the next code or data page
             // (The handout code requires that the corresponding physical
             // address is currently free.)
@@ -246,20 +198,20 @@ void process_setup(pid_t pid, const char* program_name) {
     // mark entry point
     ptable[pid].regs.reg_rip = pgm.entry();
 
+
     // allocate and map stack segment
     // Compute process virtual address for stack page
     uintptr_t stack_addr = PROC_START_ADDR + PROC_SIZE * pid - PAGESIZE;
+    int r = vmiter(ptable[pid].pagetable, stack_addr).try_map(stack_addr, PTE_PWU);
+    assert(r == 0);
     // The handout code requires that the corresponding physical address
     // is currently free.
     assert(physpages[stack_addr / PAGESIZE].refcount == 0);
     ++physpages[stack_addr / PAGESIZE].refcount;
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
-
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
 }
-
-
 
 // exception(regs)
 //    Exception handler (for interrupts, traps, and faults).
@@ -394,6 +346,7 @@ uintptr_t syscall(regstate* regs) {
             {
                 return -1;
         }
+        vmiter(ptable[current->pid].pagetable, current->regs.reg_rdi).map(current->regs.reg_rdi, PTE_PWU);
         return syscall_page_alloc(current->regs.reg_rdi);
 
     default:
