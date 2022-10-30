@@ -211,7 +211,7 @@ void process_setup(pid_t pid, const char* program_name) {
 
     // allocate and map stack segment
     // Compute process virtual address for stack page
-    uintptr_t stack_addr = PROC_START_ADDR + PROC_SIZE * pid - PAGESIZE;
+    uintptr_t stack_addr = MEMSIZE_VIRTUAL - PAGESIZE;
     int r = vmiter(ptable[pid].pagetable, stack_addr).try_map((uintptr_t) kalloc(PAGESIZE), PTE_PWU);
     assert(r == 0);
     // The handout code requires that the corresponding physical address
