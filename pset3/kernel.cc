@@ -147,8 +147,12 @@ void* kalloc(size_t sz) {
 //    If `kptr == nullptr` does nothing.
 
 void kfree(void* kptr) {
+    if (!kptr) {
+        return;
+    }
+    assert(physpages[(uintptr_t)kptr/PAGESIZE].used());
+    physpages[(uintptr_t)kptr/PAGESIZE].refcount--;
     (void) kptr;
-    assert(false /* your code here */);
 }
 
 
@@ -180,6 +184,7 @@ void process_setup(pid_t pid, const char* program_name) {
         for (uintptr_t a = round_down(seg.va(), PAGESIZE);
              a < seg.va() + seg.size();
              a += PAGESIZE) {
+            // Adding shared read only memory
             if (seg.writable()) {
                 int r = vmiter(ptable[pid].pagetable, a).try_map((uintptr_t) kalloc(PAGESIZE), PTE_PWU);
                 assert(r == 0);
@@ -216,8 +221,7 @@ void process_setup(pid_t pid, const char* program_name) {
     assert(r == 0);
     // The handout code requires that the corresponding physical address
     // is currently free.
-    //assert(physpages[stack_addr / PAGESIZE].refcount == 0);
-    //++physpages[stack_addr / PAGESIZE].refcount;
+  
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
@@ -299,7 +303,9 @@ void exception(regstate* regs) {
 }
 
 int syscall_page_alloc(uintptr_t addr);
-
+int syscall_fork();
+int syscall_exit();
+int free_table(proc *p);
 
 // syscall(regs)
 //    Handle a system call initiated by a `syscall` instruction.
@@ -359,6 +365,13 @@ uintptr_t syscall(regstate* regs) {
         
         return syscall_page_alloc(current->regs.reg_rdi);
 
+    case SYSCALL_FORK:
+        return syscall_fork();
+
+    case SYSCALL_EXIT:
+        syscall_exit();
+        schedule();
+
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
                    regs->reg_rax, current->pid, regs->reg_rip);
@@ -375,8 +388,6 @@ uintptr_t syscall(regstate* regs) {
 //    in `u-lib.hh` (but in the handout code, it does not).
 
 int syscall_page_alloc(uintptr_t addr) {
-    //assert(physpages[addr / PAGESIZE].refcount == 0);
-    //++physpages[addr / PAGESIZE].refcount;
 
     uintptr_t new_addr = (uintptr_t) kalloc(PAGESIZE);
     if (!new_addr) {
@@ -384,9 +395,93 @@ int syscall_page_alloc(uintptr_t addr) {
     }
     vmiter it(ptable[current->pid].pagetable, addr);
     int r = it.try_map(new_addr, PTE_PWU);
-    assert(r == 0);
+    if (r < 0) {
+        kfree((void*) new_addr);
+        return -1;
+    };
     memset((void*) it.pa(), 0, PAGESIZE);
     return 0;
+}
+
+int free_table(x86_64_pagetable* page_table) {
+    assert(physpages[((uintptr_t) page_table) / PAGESIZE].refcount != 0);
+    for (vmiter it(page_table, 0); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
+        if (it.user() && it.va() != CONSOLE_ADDR) {
+            kfree(it.kptr());
+        }
+    }
+    for (ptiter it(page_table); !it.done(); it.next()) {
+        kfree(it.kptr());
+    }
+    kfree(page_table);
+    return 0;
+}
+
+int syscall_exit() {
+    ptable[current->pid].state = P_FREE;
+    return free_table(current->pagetable);
+}
+
+int syscall_fork() {
+    for (int i = 1; i < NPROC; i++) {
+        if (ptable[i].state == P_FREE) {
+
+            int pid_child = i;
+            ptable[pid_child].pagetable = kalloc_pagetable();
+            if (!ptable[pid_child].pagetable) {
+                ptable[pid_child].state = P_FREE;
+                return -1;
+            }
+
+            
+            vmiter c_it(ptable[pid_child].pagetable, 0);
+            vmiter p_it(current->pagetable, 0);
+
+            // Populate kernel mappings
+            for (; p_it.va() < PROC_START_ADDR; p_it += PAGESIZE, c_it += PAGESIZE) {
+                int r = c_it.try_map(p_it.pa(), p_it.perm());
+                if (r < 0){
+                    free_table(ptable[pid_child].pagetable);
+                    return -1;
+                }
+            } 
+
+            // Populate non kernel mappings
+
+            for (;p_it.va() < MEMSIZE_VIRTUAL; p_it += PAGESIZE, c_it += PAGESIZE) {
+                // Check if parent process is writable or not before allocating
+                uintptr_t current_page_addr;
+                if (p_it.user() && !p_it.writable()) {  
+                    current_page_addr = p_it.pa();
+                    int r = c_it.try_map(p_it.pa(), p_it.perm());
+                    if (r < 0) {
+                        free_table(ptable[pid_child].pagetable);
+                        return -1;
+                    }
+                    ++physpages[current_page_addr / PAGESIZE].refcount;
+                }
+                else if (p_it.user() && p_it.writable()) {
+                    current_page_addr = (uintptr_t) kalloc(PAGESIZE);
+                    if (!current_page_addr) {
+                        free_table(ptable[pid_child].pagetable);
+                        return -1;
+                    }
+                    int r = c_it.try_map((void*)current_page_addr, p_it.perm());
+                    if (r < 0) {
+                        free_table(ptable[pid_child].pagetable);
+                        return -1;
+                    }
+                    memcpy((void*)c_it.pa(), p_it.kptr(), PAGESIZE);
+                }
+            }
+            // Making child registers same as parents
+            ptable[pid_child].regs = current->regs;
+            ptable[pid_child].regs.reg_rax = 0;
+            ptable[pid_child].state = P_RUNNABLE;
+            return pid_child;   
+        }  
+    } 
+    return -1;
 }
 
 
