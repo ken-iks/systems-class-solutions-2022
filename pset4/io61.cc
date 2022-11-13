@@ -12,9 +12,46 @@
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct io61_file {
-    int fd = -1;     // file descriptor
+    int fd;     // file descriptor
+
+    static constexpr off_t bufsize = 4096;
+    unsigned char cbuf[bufsize];
+    int mode;
+
+    off_t tag;      // file offset of first byte in cache (0 when file is opened)
+    off_t end_tag;  // file offset one past last valid byte in cache
+    off_t pos_tag;  // file offset of next char to read in cache
 };
 
+int io61_fill(io61_file* f) {
+    // Fill the read cache with new data, starting from file offset `end_tag`.
+    // Only called for read caches.
+
+    // Check invariants
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
+        return -1;
+    }
+
+    // Reset the cache to empty.
+    f->tag = f->pos_tag = f->end_tag;
+    // Read data.
+    ssize_t n = read(f->fd, f->cbuf, f->bufsize);
+    if (n >= 0) {
+        f->end_tag = f->tag + n;
+    } 
+    else {
+        return -1;
+    }
+
+    // Recheck invariants (good practice!).
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
+        return -1;
+    }
+
+    return 0;
+}
 
 // io61_fdopen(fd, mode)
 //    Returns a new io61_file for file descriptor `fd`. `mode` is either
@@ -25,7 +62,7 @@ io61_file* io61_fdopen(int fd, int mode) {
     assert(fd >= 0);
     io61_file* f = new io61_file;
     f->fd = fd;
-    (void) mode;
+    f->mode = mode;
     return f;
 }
 
@@ -46,17 +83,23 @@ int io61_close(io61_file* f) {
 //    which equals -1, on end of file or error.
 
 int io61_readc(io61_file* f) {
-    unsigned char buf[1];
-    ssize_t nr = read(f->fd, buf, 1);
-    if (nr == 1) {
-        return buf[0];
-    } else if (nr == 0) {
-        errno = 0; // clear `errno` to indicate EOF
-        return -1;
-    } else {
-        assert(nr == -1 && errno > 0);
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
         return -1;
     }
+    unsigned char buf[1];
+    if (f->pos_tag == f->end_tag) {
+        int r = io61_fill(f);
+        if (r < 0) {
+            return -1;
+        }
+        if (f->pos_tag == f->end_tag) {
+            return -1;
+        }
+    }
+    buf[0] = f->cbuf[f->pos_tag - f->tag];
+    f->pos_tag++;
+    return buf[0];
 }
 
 
@@ -70,39 +113,65 @@ int io61_readc(io61_file* f) {
 //    if end-of-file or error is encountered before all `sz` bytes are read.
 //    This is called a “short read.”
 
+
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
-    size_t nread = 0;
-    while (nread != sz) {
-        int ch = io61_readc(f);
-        if (ch == EOF) {
-            break;
-        }
-        buf[nread] = ch;
-        ++nread;
-    }
-    if (nread != 0 || sz == 0 || errno == 0) {
-        return nread;
-    } else {
+    // Check invariants.
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
         return -1;
     }
-}
 
+    size_t pos = 0;
+    while (pos < sz) {
+        if (f->pos_tag == f->end_tag) {
+            int r = io61_fill(f);
+            if (r < 0) {
+                return -1;
+            }
+            if (f->pos_tag == f->end_tag) {
+                break;
+            }
+        }
+        size_t ch = sz - pos;
+        if (ch > (size_t) (f->end_tag - f->pos_tag)) {
+            ch = (size_t) (f->end_tag - f->pos_tag);
+        }
+        memcpy(&buf[pos], &f->cbuf[f->pos_tag - f->tag], ch);
+        f->pos_tag += ch;
+        pos += ch;
+    }
+    return pos;
+}
 
 // io61_writec(f)
 //    Write a single character `ch` to `f`. Returns 0 on success and
 //    -1 on error.
 
+
 int io61_writec(io61_file* f, int ch) {
     unsigned char buf[1];
     buf[0] = ch;
-    ssize_t nw = write(f->fd, buf, 1);
-    if (nw == 1) {
-        return 0;
-    } else {
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
         return -1;
     }
-}
+    // Write cache invariant.
+    if (f->pos_tag != f->end_tag) {
+        return -1;
+    }
 
+    if (f->end_tag == f->tag + f->bufsize) {
+        int r = io61_flush(f);
+        if (r < 0){
+            return -1;
+        }
+    }
+
+    f->cbuf[f->pos_tag - f->tag] = buf[0];
+    f->pos_tag++;
+    f->end_tag++;
+    return 0;
+}
 
 // io61_write(f, buf, sz)
 //    Writes `sz` characters from `buf` to `f`. Returns `sz` on success.
@@ -111,21 +180,38 @@ int io61_writec(io61_file* f, int ch) {
 //    number of characters written, or -1 if no characters were written
 //    before the error occurred.
 
+
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
-    size_t nwritten = 0;
-    while (nwritten != sz) {
-        if (io61_writec(f, buf[nwritten]) == -1) {
-            break;
-        }
-        ++nwritten;
-    }
-    if (nwritten != 0 || sz == 0) {
-        return nwritten;
-    } else {
+    // Check invariants.
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
         return -1;
     }
-}
+    // Write cache invariant.
+    if (f->pos_tag != f->end_tag) {
+        return -1;
+    }
 
+    size_t pos = 0;
+    while (pos < sz) {
+        if (f->end_tag == f->tag + f->bufsize) {
+            int r = io61_flush(f);
+            if (r < 0){
+                return -1;
+            }
+        }
+
+        size_t ch = sz - pos;
+        if (ch > (size_t) (f->bufsize + f->tag - f->pos_tag)){
+            ch = (size_t) (f->bufsize + f->tag - f->pos_tag);
+        }
+        memcpy(&f->cbuf[f->pos_tag - f->tag], &buf[pos], ch);
+        f->pos_tag += ch;
+        f->end_tag += ch;
+        pos += ch;
+    }
+    return pos;
+}
 
 // io61_flush(f)
 //    Forces a write of any cached data written to `f`. Returns 0 on
@@ -135,25 +221,65 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    If `f` was opened read-only, `io61_flush(f)` returns 0. If may also
 //    drop any data cached for reading.
 
+
 int io61_flush(io61_file* f) {
-    (void) f;
+    // Check invariants.
+    if (!(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag) ||
+       (f->end_tag - f->pos_tag > f->bufsize)) {
+        return -1;
+    }
+    // Write cache invariant.
+    if (f->pos_tag != f->end_tag) {
+        return -1;
+    }
+
+    ssize_t n = write(f->fd, f->cbuf, f->pos_tag - f->tag);
+    if (n < 0) {
+        return -1;
+    }
+    f->tag = f->pos_tag;
     return 0;
 }
-
 
 // io61_seek(f, pos)
 //    Changes the file pointer for file `f` to `pos` bytes into the file.
 //    Returns 0 on success and -1 on failure.
-
+ 
 int io61_seek(io61_file* f, off_t pos) {
-    off_t r = lseek(f->fd, (off_t) pos, SEEK_SET);
-    if (r == (off_t) pos) {
-        return 0;
-    } else {
-        return -1;
-    }
-}
 
+    if (pos <= f->end_tag && pos >= f->tag) {
+        f->pos_tag = pos;
+        return 0;
+    }
+
+    if (f->mode == O_RDONLY){
+        off_t r = (off_t) pos - (pos % f->bufsize);
+        off_t new_seek = lseek(f->fd, r, SEEK_SET);
+        if (new_seek == r) {
+            if (io61_fill(f) < 0) {
+                return -1;
+            }
+            f->pos_tag = pos;
+            f->tag = new_seek;
+            f->end_tag = new_seek + f->bufsize;
+            return 0;
+        }
+    }
+
+    if (f->mode == O_WRONLY) {
+        if (io61_flush(f) < 0) {
+            return -1;
+        }
+        off_t new_seek = lseek(f->fd, pos, SEEK_SET);
+        if (new_seek == pos) {
+            f->tag = (off_t) pos - (pos % f->bufsize);
+            f->pos_tag = pos;
+            f->end_tag = new_seek + (new_seek % f->bufsize);
+            return 0;
+        }
+    }
+    return -1;
+}
 
 // You shouldn't need to change these functions.
 
