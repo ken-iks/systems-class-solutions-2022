@@ -1,17 +1,55 @@
 # compiler flags
-CFLAGS := -std=gnu2x -Wall -Wextra -Wshadow -g $(DEFS) $(CFLAGS)
-CXXFLAGS := -std=gnu++2a -Wall -Wextra -Wshadow -g $(DEFS) $(CXXFLAGS)
+CFLAGS := -std=gnu2x -W -Wall -Wshadow -g $(DEFS) $(CFLAGS)
+CXXFLAGS := -std=gnu++2a -W -Wall -Wshadow -g $(DEFS) $(CXXFLAGS)
 
 O ?= -O3
-ifeq ($(filter 0 1 2 3 s z g fast,$(O)),$(strip $(O)))
+ifeq ($(filter 0 1 2 3 s z g fast,$(O)$(NOOVERRIDEO)),$(strip $(O)))
 override O := -O$(O)
 endif
 
-# skip x86 versions in ARM Docker
-X86 ?= 0
-ifneq ($(X86),1)
- ifneq ($(findstring /usr/x86_64-linux-gnu/bin:,$(PATH)),)
-PATH := $(subst /usr/x86_64-linux-gnu/bin:,,$(PATH))
+# compiler variant
+ifeq ($(COMPILER),clang)
+ ifeq ($(origin CC),default)
+  ifeq ($(shell if clang --version | grep -e 'LLVM\|clang' >/dev/null; then echo 1; else echo 0; fi),1)
+CC = clang
+  endif
+ endif
+ ifeq ($(origin CXX),default)
+  ifeq ($(shell if clang++ --version | grep -e 'LLVM\|clang' >/dev/null; then echo 1; else echo 0; fi),1)
+CXX = clang++
+  endif
+ endif
+endif
+ifeq ($(COMPILER),gcc)
+ ifeq ($(origin CC),default)
+  ifeq ($(shell if gcc --version 2>&1 | grep -e 'Free Software' >/dev/null; then echo 1; else echo 0; fi),1)
+CC = gcc
+  endif
+ endif
+ ifeq ($(origin CXX),default)
+  ifeq ($(shell if g++ --version 2>&1 | grep -e 'Free Software' >/dev/null; then echo 1; else echo 0; fi),1)
+CXX = g++
+  endif
+ endif
+endif
+
+ISCLANG := $(shell if $(CC) --version | grep -e 'LLVM\|clang' >/dev/null; then echo 1; else echo 0; fi)
+ifeq ($(ISCLANG),1)
+BADCXXFLAGS ?= -fno-if-conversion -fno-if-conversion2
+endif
+
+ifeq ($(NEED_CXX_GCC),1)
+GXX_ISCLANG := $(shell if g++ --version | grep -e 'LLVM\|clang' >/dev/null; then echo 1; else echo 0; fi)
+ ifeq ($(GXX_ISCLANG),1)
+  ifeq ($(shell if g++-11 --version 2>/dev/null | grep -e 'Free Software' >/dev/null; then echo 1; else echo 0; fi),1)
+CXX_GCC = g++-11
+  else ifeq ($(shell if g++-10 --version 2>/dev/null | grep -e 'Free Software' >/dev/null; then echo 1; else echo 0; fi),1)
+CXX_GCC = g++-10
+  else
+CXX_GCC = false
+  endif
+ else
+CXX_GCC = g++
  endif
 endif
 
@@ -71,7 +109,7 @@ CXXFLAGS += -Wno-unused
 endif
 
 # these rules ensure dependencies are created
-DEPCFLAGS = -MD -MF $(DEPSDIR)/$(patsubst %.o,%,$(@F)).d -MP
+DEPCFLAGS = -MD -MF $(DEPSDIR)/$*.d -MP
 DEPSDIR := .deps
 BUILDSTAMP := $(DEPSDIR)/rebuildstamp
 DEPFILES := $(wildcard $(DEPSDIR)/*.d)
@@ -79,25 +117,12 @@ ifneq ($(DEPFILES),)
 include $(DEPFILES)
 endif
 
-# Quiet down make output for stdio and syscall versions.
-# If the user runs 'make all' or 'make check', don't provide a separate
-# link line for every stdio-% target; instead print 'LINK STDIO VERSIONS'.
-ifneq ($(filter all check check-%,$(or $(MAKECMDGOALS),all)),)
-DEP_MESSAGES := $(shell mkdir -p $(DEPSDIR); echo LINK STDIO VERSIONS >$(DEPSDIR)/stdio.txt; echo LINK SYSCALL VERSIONS >$(DEPSDIR)/syscall.txt)
-STDIO_LINK_LINE = $(shell cat $(DEPSDIR)/stdio.txt)
-SYSCALL_LINK_LINE = $(shell cat $(DEPSDIR)/syscall.txt)
-else
-STDIO_LINK_LINE = LINK $@
-SYSCALL_LINK_LINE = LINK $@
-endif
-
-
 # when the C compiler or optimization flags change, rebuild all objects
-ifneq ($(strip $(DEP_CC)),$(strip $(CC) $(CPPFLAGS) $(CFLAGS) $(O) X86=$(X86)))
-DEP_CC := $(shell mkdir -p $(DEPSDIR); echo >$(BUILDSTAMP); echo "DEP_CC:=$(CC) $(CPPFLAGS) $(CFLAGS) $(O) X86=$(X86)" >$(DEPSDIR)/_cc.d)
+ifneq ($(strip $(DEP_CC)),$(strip $(CC) $(CPPFLAGS) $(CFLAGS) $(O)))
+DEP_CC := $(shell mkdir -p $(DEPSDIR); echo >$(BUILDSTAMP); echo "DEP_CC:=$(CC) $(CPPFLAGS) $(CFLAGS) $(O)" >$(DEPSDIR)/_cc.d)
 endif
-ifneq ($(strip $(DEP_CXX)),$(strip $(CXX) $(CPPFLAGS) $(CXXFLAGS) $(O) X86=$(X86) $(LDFLAGS)))
-DEP_CXX := $(shell mkdir -p $(DEPSDIR); echo >$(BUILDSTAMP); echo "DEP_CXX:=$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(O) X86=$(X86) $(LDFLAGS)" >$(DEPSDIR)/_cxx.d)
+ifneq ($(strip $(DEP_CXX)),$(strip $(CXX) $(CPPFLAGS) $(CXXFLAGS) $(O) $(LDFLAGS)))
+DEP_CXX := $(shell mkdir -p $(DEPSDIR); echo >$(BUILDSTAMP); echo "DEP_CXX:=$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(O) $(LDFLAGS)" >$(DEPSDIR)/_cxx.d)
 endif
 
 
@@ -110,11 +135,6 @@ run = @$(if $(2),/bin/echo "  $(2) $(3)" &&,) $(1) $(3)
 xrun = $(if $(2),/bin/echo "  $(2) $(3)" &&,) $(1) $(3)
 endif
 runquiet = @$(1) $(3)
-
-CXX_LINK_PREREQUISITES = $(CXX) $(CXXFLAGS) $(LDFLAGS) $(O) -o $@ $^
-
-
-PERCENT := %
 
 # cancel implicit rules we don't want
 %: %.c
