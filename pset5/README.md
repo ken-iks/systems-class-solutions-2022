@@ -8,7 +8,7 @@ collaborators, in `AUTHORS.md`.
 Grading notes (if any)
 ----------------------
 
-
+DO NOT GRADE (taking late days)
 
 Extra credit attempted (if any)
 -------------------------------

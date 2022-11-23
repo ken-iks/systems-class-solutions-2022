@@ -17,8 +17,28 @@ struct command {
     std::vector<std::string> args;
     pid_t pid = -1;      // process ID running this command, -1 if none
 
+    int status;
+    bool is_background = false;
+
+    command* next = nullptr;
+    command* prev = nullptr;
+
     command();
     ~command();
+
+    bool redirect_out = false;
+    bool redirect_in = false;
+    bool redir_err = false;
+
+    int read_fd = -1;
+
+    // Connecting operator
+    int op = TYPE_SEQUENCE;
+
+    std::string _out;
+    std::string _in;
+    std::string _err;
+    std::string file;
 
     void run();
 };
@@ -69,7 +89,22 @@ void command::run() {
     assert(this->args.size() > 0);
     // Your code here!
 
-    fprintf(stderr, "command::run not done yet\n");
+    int N = this->args.size();
+    char* argv[N + 1];
+    for (int i = 0; i < N; i++) {
+        argv[i] = (char *) this->args[i].c_str();
+    }
+    argv[N] = nullptr;
+
+    pid_t childpid = fork();
+
+    if (childpid) {
+        this->pid = childpid;
+    }
+    if (!childpid) {
+        execvp(this->args[0].c_str(), argv);
+    }
+
 }
 
 
@@ -99,7 +134,8 @@ void command::run() {
 
 void run_list(command* c) {
     c->run();
-    fprintf(stderr, "command::run not done yet\n");
+    int wstatus;
+    waitpid(c->pid, &wstatus, 0);
 }
 
 
