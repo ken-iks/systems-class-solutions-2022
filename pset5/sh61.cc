@@ -43,6 +43,13 @@ struct command {
     void run();
 };
 
+bool chain_in_background(command* c) {
+    while (c->op != TYPE_SEQUENCE && c->op != TYPE_BACKGROUND) {
+        c = c->next;
+    }
+    return c->op == TYPE_BACKGROUND;
+}
+
 
 // command::command()
 //    This constructor function initializes a `command` structure. You may
@@ -104,6 +111,73 @@ void command::run() {
     if (!childpid) {
         execvp(this->args[0].c_str(), argv);
     }
+   /* 
+    if (this->pid == 0) {
+
+        //background check
+        if (!(this->is_background)) {
+            if (curr_pgid < 0) {
+                setpgid(0,0);
+            }
+            else {
+                setpgid(0, curr_pgid);
+            }
+        }
+
+        //pipe check
+        if (this->read_fd != -1) {
+            dup2(this->read_fd, 0);
+            close(this->read_fd);
+        }
+
+        //cd check
+        if (strcmp(argv[0], "cd") == 0) {
+            if (chdir(argv[1]) < 0) {
+                _exit(1);
+            }
+            else {
+                _exit(0);
+            }
+            return this->pid;
+        }
+
+        //redirect cases
+        if (this->redirect_out) {
+            int o_file = open(this->_out.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            change_fd(o_file, STDOUT_FILENO);
+        }
+
+        if (this->redirect_in) {
+            int i_file = open(this->_in.c_str(), O_RDONLY);
+            change_fd(i_file, STDIN_FILENO);
+        }
+
+        if (this->redir_err) {
+            int e_file = open(this->_err.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            change_fd(e_file, STDERR_FILENO);
+        }
+
+        if (execvp(argv[0], argv) < 0) {
+            _exit(EXIT_FAILURE);
+        }
+    }
+    else {
+        if (strcmp(argv[0], "cd") == 0) {
+            chdir(argv[1]);
+        }
+    }
+
+    if (curr_pgid != -1) {
+        setpgid(this->pid, this->pid);
+        curr_pgid = getpgid(this->pid);
+    }
+    else {
+        setpgid(this->pid, curr_pgid);
+        curr_pgid = getpgid(this->pid);
+    }
+
+    return this->pid;
+    */
 
 }
 
@@ -133,9 +207,12 @@ void command::run() {
 //       This may require adding another call to `fork()`!
 
 void run_list(command* c) {
-    c->run();
-    int wstatus;
-    waitpid(c->pid, &wstatus, 0);
+    if (c) {
+        c->run();
+        int wstatus;
+        waitpid(c->pid, &wstatus, 0);
+        run_list(c->next);
+    }
 }
 
 
@@ -151,14 +228,39 @@ command* parse_line(const char* s) {
     // Build the command
     // The handout code treats every token as a normal command word.
     // You'll add code to handle operators.
-    command* c = nullptr;
-    for (shell_token_iterator it = parser.begin(); it != parser.end(); ++it) {
-        if (!c) {
-            c = new command;
+    command* chead = nullptr;    // first command in list
+    command* clast = nullptr;    // last command in list
+    command* ccur = nullptr;     // current command being built
+    for (auto it = parser.begin(); it != parser.end(); ++it) {
+        switch (it.type()) {
+        case TYPE_NORMAL:
+            // Add a new argument to the current command.
+            // Might require creating a new command.
+            if (!ccur) {
+                ccur = new command;
+                if (clast) {
+                    clast->next = ccur;
+                    ccur->prev = clast;
+                } else {
+                    chead = ccur;
+                }
+            }
+            ccur->args.push_back(it.str());
+            break;
+        case TYPE_SEQUENCE:
+        case TYPE_BACKGROUND:
+        case TYPE_PIPE:
+        case TYPE_AND:
+        case TYPE_OR:
+            // These operators terminate the current command.
+            assert(ccur);
+            clast = ccur;
+            clast->op = it.type();
+            ccur = nullptr;
+            break;
         }
-        c->args.push_back(it.str());
     }
-    return c;
+    return chead;
 }
 
 
