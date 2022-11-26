@@ -116,10 +116,9 @@ pid_t command::run() {
     }
     argv[N] = nullptr;
 
-    pid_t childpid = fork();
-    this->pid = childpid;
+    this->pid = fork();
 
-    if (childpid == 0) {
+    if (this->pid == 0) {
         // cd check
         if (strcmp(argv[0], "cd") == 0) {
             if (chdir(argv[1]) < 0) {
