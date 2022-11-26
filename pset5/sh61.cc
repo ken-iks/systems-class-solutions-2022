@@ -198,7 +198,7 @@ void run_helper(command* c, command* end, bool background = false) {
             
             c->pid = c->run();
             if (c->op != TYPE_BACKGROUND) {
-                waitpid(c->pid, &wstatus, WUNTRACED);
+                waitpid(c->pid, &wstatus, 0);
             }
             if (c->op == TYPE_AND) {
                 cond_true = (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0);
