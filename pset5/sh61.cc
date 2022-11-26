@@ -51,6 +51,17 @@ command* chain_in_background(command* c) {
     return c->next;
 }
 
+void change_fd(int file, int curr) {
+    if (file < 0) {
+        fprintf(stderr, "No such file or directory\n");
+        _exit(1);
+    }
+    else {
+        dup2(file, curr);
+        close(file);
+    }
+}
+
 
 // command::command()
 //    This constructor function initializes a `command` structure. You may
@@ -66,16 +77,6 @@ command::command() {
 command::~command() {
 }
 
-void change_fd(int file, int curr) {
-    if (file < 0) {
-        fprintf(stderr, "No such file or directory\n");
-        _exit(1);
-    }
-    else {
-        dup2(file, curr);
-        close(file);
-    }
-}
 
 
 // COMMAND EXECUTION
@@ -250,6 +251,7 @@ void run_list(command* c) {
         if (last->prev->op == TYPE_BACKGROUND) {
             if (fork() == 0) {
                 run_helper(c, last, true);
+                _exit(0);
             }
             else {
                 run_list(last);
