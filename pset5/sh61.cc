@@ -66,6 +66,17 @@ command::command() {
 command::~command() {
 }
 
+void change_fd(int file, int curr) {
+    if (file < 0) {
+        fprintf(stderr, "No such file or directory\n");
+        _exit(1);
+    }
+    else {
+        dup2(file, curr);
+        close(file);
+    }
+}
+
 
 // COMMAND EXECUTION
 
@@ -105,14 +116,70 @@ pid_t command::run() {
     argv[N] = nullptr;
 
     pid_t childpid = fork();
+    this->pid = childpid;
 
-    if (childpid) {
-        this->pid = childpid;
+    if (childpid == 0) {
+        // cd check
+        if (strcmp(argv[0], "cd") == 0) {
+            if (chdir(argv[1]) < 0) {
+                _exit(1);
+            }
+            else {
+                _exit(0);
+            }
+            return this->pid;
+        }
+        // pipe check
+        if (this->read_fd != -1) {
+            dup2(this->read_fd, 0);
+            close(this->read_fd);
+        }
+
+        //redirection check
+        if (this->redirect_in) {
+            int i_file = open(this->in.c_str(), O_RDONLY);
+            change_fd(i_file, STDIN_FILENO);
+        }
+        if (this->redirect_out) {
+            int o_file = open(this->out.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            change_fd(o_file, STDOUT_FILENO);
+        }
+        if (this->redirect_err) {
+            int e_file = open(this->err.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            change_fd(e_file, STDERR_FILENO);
+        }
+        if (execvp(argv[0], argv) < 0) {
+            _exit(0);
+        }
     }
-    if (!childpid) {
-        execvp(this->args[0].c_str(), argv);
+    else {
+        if (strcmp(argv[0], "cd") == 0) {
+            //avoiding unused variable warning
+            assert(chdir(argv[1]) != -10);
+        }
     }
+
     return this->pid;
+}
+
+void run_pipe(command* c, int status) {
+    int pipefd[2];
+    assert(pipe(pipefd) >= 0);
+    if (c->next) {
+        c->next->read_fd = pipefd[0];
+    }
+
+    if (fork() == 0) {
+        dup2(pipefd[1], 1);
+        close(pipefd[1]);
+        close(pipefd[0]);
+        c->pid = c->run();
+        _exit(0);
+    }
+    else {
+        waitpid(0, &status, WNOHANG);
+        close(pipefd[1]);
+    } 
 }
 
 void run_helper(command* c, command* end, bool background = false) {
@@ -123,10 +190,15 @@ void run_helper(command* c, command* end, bool background = false) {
             if (background) {
                 c->is_background = true;
             }
+            if (c->op == TYPE_PIPE) {
+                run_pipe(c, wstatus);
+                c = c->next; 
+                continue;
+            }
             
             c->pid = c->run();
             if (c->op != TYPE_BACKGROUND) {
-                waitpid(c->pid, &wstatus, 0);
+                waitpid(c->pid, &wstatus, WUNTRACED);
             }
             if (c->op == TYPE_AND) {
                 cond_true = (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0);
@@ -327,7 +399,9 @@ int main(int argc, char* argv[]) {
         }
 
         // Handle zombie processes and/or interrupt requests
-        // Your code here!
+        while (waitpid(-1, NULL, WNOHANG) > 0) {
+            continue;
+        }
     }
 
     return 0;
