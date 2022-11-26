@@ -4,6 +4,7 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <iostream>
 
 // For the love of God
 #undef exit
@@ -28,26 +29,26 @@ struct command {
 
     bool redirect_out = false;
     bool redirect_in = false;
-    bool redir_err = false;
+    bool redirect_err = false;
 
     int read_fd = -1;
 
     // Connecting operator
     int op = TYPE_SEQUENCE;
 
-    std::string _out;
-    std::string _in;
-    std::string _err;
+    std::string out;
+    std::string in;
+    std::string err;
     std::string file;
 
-    void run();
+    pid_t run();
 };
 
-bool chain_in_background(command* c) {
-    while (c->op != TYPE_SEQUENCE && c->op != TYPE_BACKGROUND) {
+command* chain_in_background(command* c) {
+    while (c->next && c->op != TYPE_SEQUENCE && c->op != TYPE_BACKGROUND) {
         c = c->next;
     }
-    return c->op == TYPE_BACKGROUND;
+    return c->next;
 }
 
 
@@ -91,7 +92,7 @@ command::~command() {
 //       Draw pictures!
 //    PART 7: Handle redirections.
 
-void command::run() {
+pid_t command::run() {
     assert(this->pid == -1);
     assert(this->args.size() > 0);
     // Your code here!
@@ -111,76 +112,41 @@ void command::run() {
     if (!childpid) {
         execvp(this->args[0].c_str(), argv);
     }
-   /* 
-    if (this->pid == 0) {
-
-        //background check
-        if (!(this->is_background)) {
-            if (curr_pgid < 0) {
-                setpgid(0,0);
-            }
-            else {
-                setpgid(0, curr_pgid);
-            }
-        }
-
-        //pipe check
-        if (this->read_fd != -1) {
-            dup2(this->read_fd, 0);
-            close(this->read_fd);
-        }
-
-        //cd check
-        if (strcmp(argv[0], "cd") == 0) {
-            if (chdir(argv[1]) < 0) {
-                _exit(1);
-            }
-            else {
-                _exit(0);
-            }
-            return this->pid;
-        }
-
-        //redirect cases
-        if (this->redirect_out) {
-            int o_file = open(this->_out.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            change_fd(o_file, STDOUT_FILENO);
-        }
-
-        if (this->redirect_in) {
-            int i_file = open(this->_in.c_str(), O_RDONLY);
-            change_fd(i_file, STDIN_FILENO);
-        }
-
-        if (this->redir_err) {
-            int e_file = open(this->_err.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            change_fd(e_file, STDERR_FILENO);
-        }
-
-        if (execvp(argv[0], argv) < 0) {
-            _exit(EXIT_FAILURE);
-        }
-    }
-    else {
-        if (strcmp(argv[0], "cd") == 0) {
-            chdir(argv[1]);
-        }
-    }
-
-    if (curr_pgid != -1) {
-        setpgid(this->pid, this->pid);
-        curr_pgid = getpgid(this->pid);
-    }
-    else {
-        setpgid(this->pid, curr_pgid);
-        curr_pgid = getpgid(this->pid);
-    }
-
     return this->pid;
-    */
-
 }
 
+void run_helper(command* c, command* end, bool background = false) {
+    bool cond_true = true;
+    int wstatus = c->status;
+    while (c && c != end) {
+        if (cond_true) {
+            if (background) {
+                c->is_background = true;
+            }
+            
+            c->pid = c->run();
+            if (c->op != TYPE_BACKGROUND) {
+                waitpid(c->pid, &wstatus, 0);
+            }
+            if (c->op == TYPE_AND) {
+                cond_true = (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0);
+            }
+            else if (c->op == TYPE_OR) {
+                cond_true = (!(WIFEXITED(wstatus)) || (WEXITSTATUS(wstatus) != 0));
+            }
+        }
+        else {
+            cond_true = true;
+            if (c->op == TYPE_AND) {
+                cond_true = (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0);
+            }
+            else if (c->op == TYPE_OR) {
+                cond_true = (!(WIFEXITED(wstatus)) || (WEXITSTATUS(wstatus) != 0));            
+            }   
+        }
+        c = c->next;
+    }
+}
 
 // run_list(c)
 //    Run the command *list* starting at `c`. Initially this just calls
@@ -207,11 +173,22 @@ void command::run() {
 //       This may require adding another call to `fork()`!
 
 void run_list(command* c) {
-    if (c) {
-        c->run();
-        int wstatus;
-        waitpid(c->pid, &wstatus, 0);
-        run_list(c->next);
+    command* last = chain_in_background(c);
+    if (last) {
+        if (last->prev->op == TYPE_BACKGROUND) {
+            if (fork() == 0) {
+                run_helper(c, last, true);
+            }
+            else {
+                run_list(last);
+            }
+        }
+        else {
+            run_helper(c, nullptr);
+        }
+    }
+    else {
+        run_helper(c, nullptr);
     }
 }
 
@@ -238,6 +215,7 @@ command* parse_line(const char* s) {
             // Might require creating a new command.
             if (!ccur) {
                 ccur = new command;
+                ccur->op = it.type();
                 if (clast) {
                     clast->next = ccur;
                     ccur->prev = clast;
@@ -257,6 +235,28 @@ command* parse_line(const char* s) {
             clast = ccur;
             clast->op = it.type();
             ccur = nullptr;
+            break;
+        case TYPE_REDIRECT_OP:
+            clast = ccur;
+            clast->op = it.type();
+            // Input
+            if (it.str().compare("<") == 0) {
+                clast->redirect_in = true;
+                ++it;
+                clast->in = it.str();
+            }
+            // Output
+            if (it.str().compare(">") == 0) {
+                clast->redirect_out = true;
+                ++it;
+                clast->out = it.str();
+            }
+            // Error
+            if (it.str().compare("2>") == 0) {
+                clast->redirect_err = true;
+                ++it;
+                clast->err = it.str();
+            }
             break;
         }
     }
