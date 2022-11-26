@@ -75,6 +75,9 @@ command::command() {
 //    This destructor function is called to delete a command.
 
 command::~command() {
+    if (this->next) {
+        delete(this->next);
+    }
 }
 
 
