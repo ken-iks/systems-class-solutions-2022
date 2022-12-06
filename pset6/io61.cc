@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <thread>
 
 // io61.cc
 //    YOUR CODE HERE!
@@ -29,7 +30,23 @@ struct io61_file {
     // Positioned mode
     bool dirty = false;       // has cache been written?
     bool positioned = false;  // is cache in positioned mode?
+
+    // Synchronization
+    std::recursive_mutex mutex;
+    std::condition_variable_any cv;
+    struct region_lock {
+        unsigned locked = 0;
+        std::thread::id owner;
+    } reg[64];
 };
+
+static int file_region(off_t off) {
+    int pos = off / 16;
+    if (pos > 62) {
+        return 63;
+    }
+    return pos;
+}
 
 
 // io61_fdopen(fd, mode)
@@ -355,7 +372,15 @@ static int io61_pfill(io61_file* f, off_t off) {
     return 0;
 }
 
-
+bool may_overlap_with_other_lock(io61_file* f, off_t start, off_t len) {
+    int rstart = file_region(start), rend = file_region(start + len - 1);
+    for (int ri = rstart; ri <= rend; ++ri) {
+        if (f->reg[ri].locked > 0 && f->reg[ri].owner != std::this_thread::get_id()) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // FILE LOCKING FUNCTIONS
 
@@ -368,11 +393,16 @@ static int io61_pfill(io61_file* f, off_t off) {
 //    block: if the lock cannot be acquired, it returns -1 right away.
 
 int io61_try_lock(io61_file* f, off_t start, off_t len, int locktype) {
-    (void) f;
-    assert(start >= 0 && len >= 0);
-    assert(locktype == LOCK_EX || locktype == LOCK_SH);
     if (len == 0) {
         return 0;
+    }
+    std::unique_lock guard(f->mutex);
+    if (may_overlap_with_other_lock(f, start, len)) {
+        return -1;
+    }
+    for (int ri = file_region(start); ri <= file_region(start + len - 1); ++ri) {
+        ++f->reg[ri].locked;
+        f->reg[ri].owner = std::this_thread::get_id();
     }
     return 0;
 }
@@ -388,13 +418,16 @@ int io61_try_lock(io61_file* f, off_t start, off_t len, int locktype) {
 //    error conditions, such as EDEADLK (a deadlock was detected).
 
 int io61_lock(io61_file* f, off_t start, off_t len, int locktype) {
-    assert(start >= 0 && len >= 0);
-    assert(locktype == LOCK_EX || locktype == LOCK_SH);
     if (len == 0) {
         return 0;
     }
-    // The handout code polls using `io61_try_lock`.
-    while (io61_try_lock(f, start, len, locktype) != 0) {
+    std::unique_lock guard(f->mutex);
+    while (may_overlap_with_other_lock(f, start, len)) {
+        f->cv.wait(guard);
+    }
+    for (int ri = file_region(start); ri <= file_region(start + len - 1); ++ri) {
+        ++f->reg[ri].locked;
+        f->reg[ri].owner = std::this_thread::get_id();
     }
     return 0;
 }
@@ -405,11 +438,14 @@ int io61_lock(io61_file* f, off_t start, off_t len, int locktype) {
 //    Returns 0 on success and -1 on error.
 
 int io61_unlock(io61_file* f, off_t start, off_t len) {
-    (void) f;
-    assert(start >= 0 && len >= 0);
     if (len == 0) {
         return 0;
     }
+    std::unique_lock guard(f->mutex);
+    for (int ri = file_region(start); ri <= file_region(start + len - 1); ++ri) {
+        --f->reg[ri].locked;
+    }
+    f->cv.notify_all(); // spurious wakeup possible, prob no big deal
     return 0;
 }
 
