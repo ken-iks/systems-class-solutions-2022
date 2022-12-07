@@ -124,6 +124,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
         if (f->pos_tag == f->end_tag) {
             int r = io61_fill(f);
             if (r == -1 && nread == 0) {
+                f->mutex.unlock();
                 return -1;
             } else if (f->pos_tag == f->end_tag) {
                 break;
@@ -175,6 +176,7 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
         if (f->end_tag == f->tag + f->cbufsz) {
             int r = io61_flush(f);
             if (r == -1 && nwritten == 0) {
+                f->mutex.unlock();
                 return -1;
             } else if (r == -1) {
                 break;
@@ -208,6 +210,7 @@ int locked_io61_flush(io61_file* f);
 
 int io61_flush(io61_file* f) {
     if (f->mutex.try_lock()) {
+        f->mutex.unlock();
         return locked_io61_flush(f);
     }
     if (f->dirty && f->positioned) {
@@ -220,6 +223,7 @@ int io61_flush(io61_file* f) {
 }
 
 int locked_io61_flush(io61_file* f) {
+    f->mutex.lock();
     if (f->dirty && f->positioned) {
         f->mutex.unlock();
         return io61_flush_dirty_positioned(f);
