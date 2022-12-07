@@ -204,9 +204,22 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 static int io61_flush_dirty(io61_file* f);
 static int io61_flush_dirty_positioned(io61_file* f);
 static int io61_flush_clean(io61_file* f);
+int locked_io61_flush(io61_file* f);
 
 int io61_flush(io61_file* f) {
-    f->mutex.lock();
+    if (f->mutex.try_lock()) {
+        return locked_io61_flush(f);
+    }
+    if (f->dirty && f->positioned) {
+        return io61_flush_dirty_positioned(f);
+    } else if (f->dirty) {
+        return io61_flush_dirty(f);
+    } else {
+        return io61_flush_clean(f);
+    }
+}
+
+int locked_io61_flush(io61_file* f) {
     if (f->dirty && f->positioned) {
         f->mutex.unlock();
         return io61_flush_dirty_positioned(f);
