@@ -374,23 +374,19 @@ ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
 //    The handout code rounds `off` down to a multiple of 8192.
 
 static int io61_pfill(io61_file* f, off_t off) {
-    f->mutex.lock();
     assert(f->mode == O_RDWR);
     if (f->dirty && io61_flush(f) == -1) {
-        f->mutex.unlock();
         return -1;
     }
 
     off = off - (off % 8192);
     ssize_t nr = pread(f->fd, f->cbuf, f->cbufsz, off);
     if (nr == -1) {
-        f->mutex.unlock();
         return -1;
     }
     f->tag = off;
     f->end_tag = off + nr;
     f->positioned = true;
-    f->mutex.unlock();
     return 0;
 }
 
