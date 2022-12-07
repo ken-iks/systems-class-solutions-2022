@@ -119,6 +119,7 @@ int io61_readc(io61_file* f) {
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     assert(!f->positioned);
     size_t nread = 0;
+    f->mutex.lock();
     while (nread != sz) {
         if (f->pos_tag == f->end_tag) {
             int r = io61_fill(f);
@@ -134,6 +135,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
         nread += ncopy;
         f->pos_tag += ncopy;
     }
+    f->mutex.unlock();
     return nread;
 }
 
@@ -168,6 +170,7 @@ int io61_writec(io61_file* f, int c) {
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     assert(!f->positioned);
     size_t nwritten = 0;
+    f->mutex.lock();
     while (nwritten != sz) {
         if (f->end_tag == f->tag + f->cbufsz) {
             int r = io61_flush(f);
@@ -185,6 +188,7 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
         f->dirty = true;
         nwritten += ncopy;
     }
+    f->mutex.unlock();
     return nwritten;
 }
 
@@ -202,11 +206,15 @@ static int io61_flush_dirty_positioned(io61_file* f);
 static int io61_flush_clean(io61_file* f);
 
 int io61_flush(io61_file* f) {
+    f->mutex.lock();
     if (f->dirty && f->positioned) {
+        f->mutex.unlock();
         return io61_flush_dirty_positioned(f);
     } else if (f->dirty) {
+        f->mutex.unlock();
         return io61_flush_dirty(f);
     } else {
+        f->mutex.unlock();
         return io61_flush_clean(f);
     }
 }
@@ -217,16 +225,20 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
+    f->mutex.lock();
     int r = io61_flush(f);
     if (r == -1) {
+        f->mutex.unlock();
         return -1;
     }
     off_t roff = lseek(f->fd, off, SEEK_SET);
     if (roff == -1) {
+        f->mutex.unlock();
         return -1;
     }
     f->tag = f->pos_tag = f->end_tag = off;
     f->positioned = false;
+    f->mutex.unlock();
     return 0;
 }
 
