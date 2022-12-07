@@ -330,13 +330,16 @@ static int io61_pfill(io61_file* f, off_t off);
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
+        f->mutex.lock();
         if (io61_pfill(f, off) == -1) {
+            f->mutex.unlock();
             return -1;
         }
     }
     size_t nleft = f->end_tag - off;
     size_t ncopy = std::min(sz, nleft);
     memcpy(buf, &f->cbuf[off - f->tag], ncopy);
+    f->mutex.unlock();
     return ncopy;
 }
 
@@ -350,8 +353,10 @@ ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
 
 ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
                     off_t off) {
+    f->mutex.lock();
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
+            f->mutex.unlock();
             return -1;
         }
     }
@@ -359,6 +364,7 @@ ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
     size_t ncopy = std::min(sz, nleft);
     memcpy(&f->cbuf[off - f->tag], buf, ncopy);
     f->dirty = true;
+    f->mutex.unlock();
     return ncopy;
 }
 
@@ -368,19 +374,23 @@ ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
 //    The handout code rounds `off` down to a multiple of 8192.
 
 static int io61_pfill(io61_file* f, off_t off) {
+    f->mutex.lock();
     assert(f->mode == O_RDWR);
     if (f->dirty && io61_flush(f) == -1) {
+        f->mutex.unlock();
         return -1;
     }
 
     off = off - (off % 8192);
     ssize_t nr = pread(f->fd, f->cbuf, f->cbufsz, off);
     if (nr == -1) {
+        f->mutex.unlock();
         return -1;
     }
     f->tag = off;
     f->end_tag = off + nr;
     f->positioned = true;
+    f->mutex.unlock();
     return 0;
 }
 
@@ -405,6 +415,7 @@ bool may_overlap_with_other_lock(io61_file* f, off_t start, off_t len) {
 //    block: if the lock cannot be acquired, it returns -1 right away.
 
 int io61_try_lock(io61_file* f, off_t start, off_t len, int locktype) {
+    assert(locktype == LOCK_EX);
     if (len == 0) {
         return 0;
     }
@@ -430,6 +441,7 @@ int io61_try_lock(io61_file* f, off_t start, off_t len, int locktype) {
 //    error conditions, such as EDEADLK (a deadlock was detected).
 
 int io61_lock(io61_file* f, off_t start, off_t len, int locktype) {
+    assert(locktype == LOCK_EX);
     if (len == 0) {
         return 0;
     }
