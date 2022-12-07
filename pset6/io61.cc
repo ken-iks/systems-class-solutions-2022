@@ -346,10 +346,10 @@ static int io61_pfill(io61_file* f, off_t off);
 
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
+    f->mutex.lock();
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
-        f->mutex.lock();
+        f->mutex.unlock();
         if (io61_pfill(f, off) == -1) {
-            f->mutex.unlock();
             return -1;
         }
     }
