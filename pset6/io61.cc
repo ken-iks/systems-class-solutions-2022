@@ -28,7 +28,7 @@ struct io61_file {
     off_t end_tag;   // offset one past last valid character in `cbuf`
 
     // Positioned mode
-    bool dirty = false;       // has cache been written?
+    sig_atomic_t dirty = false;       // has cache been written?
     bool positioned = false;  // is cache in positioned mode?
 
     // Synchronization
@@ -346,10 +346,10 @@ static int io61_pfill(io61_file* f, off_t off);
 
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
-    f->mutex.lock();
+    f->mutex.try_lock();
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
-        f->mutex.unlock();
         if (io61_pfill(f, off) == -1) {
+            f->mutex.unlock();
             return -1;
         }
     }
