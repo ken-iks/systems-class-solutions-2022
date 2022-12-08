@@ -28,7 +28,7 @@ struct io61_file {
     off_t end_tag;   // offset one past last valid character in `cbuf`
 
     // Positioned mode
-    sig_atomic_t dirty = false;       // has cache been written?
+    std::atomic_bool dirty = false;       // has cache been written?
     bool positioned = false;  // is cache in positioned mode?
 
     // Synchronization
