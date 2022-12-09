@@ -94,14 +94,17 @@ static int io61_fill(io61_file* f);
 
 int io61_readc(io61_file* f) {
     assert(!f->positioned);
+    f->mutex.lock();
     if (f->pos_tag == f->end_tag) {
         io61_fill(f);
         if (f->pos_tag == f->end_tag) {
+            f->mutex.unlock();
             return -1;
         }
     }
     unsigned char ch = f->cbuf[f->pos_tag - f->tag];
     ++f->pos_tag;
+    f->mutex.unlock();
     return ch;
 }
 
@@ -147,6 +150,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
 int io61_writec(io61_file* f, int c) {
     assert(!f->positioned);
+    f->mutex.lock();
     if (f->pos_tag == f->tag + f->cbufsz) {
         int r = io61_flush(f);
         if (r == -1) {
@@ -157,6 +161,7 @@ int io61_writec(io61_file* f, int c) {
     ++f->pos_tag;
     ++f->end_tag;
     f->dirty = true;
+    f->mutex.unlock();
     return 0;
 }
 
